@@ -13,13 +13,12 @@ import json
 import optparse
 import email
 import subprocess
+import hashlib
 from future.builtins import bytes
 
 import yaml
 import requests
 import coloredlogs
-
-import hashlib
 
 import alexapi.config
 import alexapi.tunein as tunein
