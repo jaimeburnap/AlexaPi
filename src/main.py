@@ -19,6 +19,8 @@ import yaml
 import requests
 import coloredlogs
 
+import hashlib
+
 import alexapi.config
 import alexapi.tunein as tunein
 import alexapi.capture
@@ -438,7 +440,7 @@ def process_response(response):
 				j = json.loads(payload.get_payload())
 				logger.debug("JSON String Returned: %s", json.dumps(j, indent=2))
 			elif payload.get_content_type() == "audio/mpeg":
-				filename = tmp_path + payload.get('Content-ID').strip("<>") + ".mp3"
+				filename = tmp_path + hashlib.md5(payload.get('Content-ID').strip("<>")).hexdigest() + ".mp3"
 				with open(filename, 'wb') as f:
 					f.write(payload.get_payload(decode=True))
 			else:
@@ -452,7 +454,7 @@ def process_response(response):
 			for directive in j['messageBody']['directives']:
 				if directive['namespace'] == 'SpeechSynthesizer':
 					if directive['name'] == 'speak':
-						player.play_speech(mrl_fix("file://" + tmp_path + directive['payload']['audioContent'].lstrip("cid:") + ".mp3"))
+						player.play_speech(mrl_fix("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].lstrip("cid:")).hexdigest() + ".mp3"))
 
 				elif directive['namespace'] == 'SpeechRecognizer':
 					if directive['name'] == 'listen':
