@@ -139,12 +139,12 @@ class Player(object):
 
 			url = stream['streamUrl']
 			if stream['streamUrl'].startswith("cid:"):
-				url = "file://" + tmp_path + stream['streamUrl'].lstrip("cid:") + ".mp3"
+				url = "file://" + tmp_path + hashlib.md5(stream['streamUrl'].lstrip("cid:")).hexdigest() + ".mp3"
 
 			if (url.find('radiotime.com') != -1):
 				url = self.tunein_playlist(url)
 
-			self.pHandler.queued_play(mrl_fix(url), stream['offsetInMilliseconds'], audio_type='media', stream_id=streamId)
+			self.pHandler.queued_play(url, stream['offsetInMilliseconds'], audio_type='media', stream_id=streamId)
 
 	def play_speech(self, mrl):
 		self.stop()
@@ -209,15 +209,6 @@ tmp_path = os.path.join(tempfile.mkdtemp(prefix='AlexaPi-runtime-'), '')
 
 MAX_VOLUME = 100
 MIN_VOLUME = 30
-
-
-def mrl_fix(url):
-	if ('#' in url) and url.startswith('file://'):
-		new_url = url.replace('#', '.hashMark.')
-		os.rename(url.replace('file://', ''), new_url.replace('file://', ''))
-		url = new_url
-
-	return url
 
 
 def internet_on():
@@ -453,7 +444,7 @@ def process_response(response):
 			for directive in j['messageBody']['directives']:
 				if directive['namespace'] == 'SpeechSynthesizer':
 					if directive['name'] == 'speak':
-						player.play_speech(mrl_fix("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].lstrip("cid:")).hexdigest() + ".mp3"))
+						player.play_speech("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].lstrip("cid:")).hexdigest() + ".mp3")
 
 				elif directive['namespace'] == 'SpeechRecognizer':
 					if directive['name'] == 'listen':
