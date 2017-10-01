@@ -139,7 +139,7 @@ class Player(object):
 
 			url = stream['streamUrl']
 			if stream['streamUrl'].startswith("cid:"):
-				url = "file://" + tmp_path + hashlib.md5(stream['streamUrl'].lstrip("cid:")).hexdigest() + ".mp3"
+				url = "file://" + tmp_path + hashlib.md5(stream['streamUrl'].replace("cid:", "", 1)).hexdigest() + ".mp3"
 
 			if (url.find('radiotime.com') != -1):
 				url = self.tunein_playlist(url)
@@ -444,7 +444,7 @@ def process_response(response):
 			for directive in j['messageBody']['directives']:
 				if directive['namespace'] == 'SpeechSynthesizer':
 					if directive['name'] == 'speak':
-						player.play_speech("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].lstrip("cid:")).hexdigest() + ".mp3")
+						player.play_speech("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].replace("cid:", "", 1)).hexdigest() + ".mp3")
 
 				elif directive['namespace'] == 'SpeechRecognizer':
 					if directive['name'] == 'listen':
