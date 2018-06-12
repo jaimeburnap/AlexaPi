@@ -5,12 +5,12 @@ from .rpilikeplatform import RPiLikePlatform
 
 class RaspberrypiPlatform(RPiLikePlatform):
 
-	def __init__(self, config):
-		super(RaspberrypiPlatform, self).__init__(config, 'raspberrypi', GPIO)
+    def __init__(self, config):
+        super(RaspberrypiPlatform, self).__init__(config, 'raspberrypi', GPIO)
 
-	def setup(self):
-		GPIO.setwarnings(False)
-		GPIO.cleanup()
-		GPIO.setmode(GPIO.BCM)
+    def setup(self):
+        GPIO.setwarnings(False)
+        GPIO.cleanup()
+        GPIO.setmode(GPIO.BCM)
 
-		super(RaspberrypiPlatform, self).setup()
+        super(RaspberrypiPlatform, self).setup()

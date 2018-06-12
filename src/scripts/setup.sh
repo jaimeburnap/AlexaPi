@@ -8,7 +8,7 @@ pushd "$(dirname "$0")/../" > /dev/null
 ALEXASRC_DIRECTORY=$(pwd -P)
 popd > /dev/null
 
-SCRIPT_DIRECTORY=$ALEXASRC_DIRECTORY/scripts
+SCRIPT_DIRECTORY=${ALEXASRC_DIRECTORY}/scripts
 ALEXASRC_DIRECTORY_CORRECT="/opt/AlexaPi/src"
 CONFIG_SYSTEM_DIRECTORY="/etc/opt/AlexaPi"
 CONFIG_FILENAME="config.yaml"

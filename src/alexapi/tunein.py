@@ -193,8 +193,8 @@ class TuneIn(object):
 
     def reload(self):
         self._stations.clear()
-        self._tunein.clear()	# pylint: disable=no-member
-        self._get_playlist.clear()      # pylint: disable=no-member
+        self._tunein.clear()  # pylint: disable=no-member
+        self._get_playlist.clear()  # pylint: disable=no-member
 
     def _flatten(self, data):
         results = []
@@ -321,7 +321,7 @@ class TuneIn(object):
                 try:
                     results = [u for u in parser(playlist_data)
                                if u and u != url]
-                except Exception as exp:   # pylint: disable=broad-except
+                except Exception as exp:  # pylint: disable=broad-except
                     logger.error('TuneIn playlist parsing failed %s', exp)
                 if not results:
                     logger.debug('Parsing failure, '
@@ -375,7 +375,7 @@ class TuneIn(object):
             with closing(self._session.get(uri, timeout=self._timeout)) as resp:
                 resp.raise_for_status()
                 return resp.json()['body']
-        except Exception as exp:   # pylint: disable=broad-except
+        except Exception as exp:  # pylint: disable=broad-except
             logger.info('TuneIn API request for %s failed: %s', variant, exp)
         return {}
 
@@ -392,6 +392,6 @@ class TuneIn(object):
                 logger.debug('%s has content-type: %s', uri, content_type)
                 if content_type != 'audio/mpeg':
                     data = resp.content.decode('utf-8', errors='ignore')
-        except Exception as exp:   # pylint: disable=broad-except
+        except Exception as exp:  # pylint: disable=broad-except
             logger.info('TuneIn playlist request for %s failed: %s', uri, exp)
         return (data, content_type)
