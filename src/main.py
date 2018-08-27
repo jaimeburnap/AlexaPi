@@ -15,17 +15,20 @@ import email
 import subprocess
 import hashlib
 from future.builtins import bytes
+import uuid
 
 import yaml
 import requests
 import coloredlogs
 
-import alexapi.config as config
+import alexapi.config as apconfig
 import alexapi.tunein as tunein
 import alexapi.capture
 import alexapi.triggers as triggers
 from alexapi.exceptions import ConfigurationException
 from alexapi.constants import RequestType, PlayerActivity
+from hyper import HTTPConnection
+from hyper.contrib import HTTP20Adapter
 
 logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s')
 coloredlogs.DEFAULT_FIELD_STYLES = {
@@ -65,10 +68,10 @@ cmdopts, cmdargs = parser.parse_args()
 silent = cmdopts.silent
 debug = cmdopts.debug
 
-config_exists = config.filename is not None
+config_exists = apconfig.filename is not None
 
 if config_exists:
-    with open(config.filename, 'r') as stream:
+    with open(apconfig.filename, 'r') as stream:
         config = yaml.load(stream)
 
 if debug:
@@ -138,13 +141,25 @@ class Player(object):
 
             url = astream['streamUrl']
             if astream['streamUrl'].startswith("cid:"):
-                url = "file://" + tmp_path + hashlib.md5(
-                    astream['streamUrl'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
+                url = "file://" + tmp_path + hashlib.md5(astream['streamUrl'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
 
             if url.find('radiotime.com') != -1:
                 url = self.tunein_playlist(url)
 
             self.pHandler.queued_play(url, astream['offsetInMilliseconds'], audio_type='media', stream_id=stream_id)
+
+    def play_playlist2(self, payload):
+        self.navigation_token = payload['audioItem']['stream']['token']
+        self.playlist_last_item = payload['audioItem']['audioItemId']
+        url = payload['audioItem']['stream']['url']
+
+        if url.startswith("cid:"):
+            url = "file://" + tmp_path + hashlib.md5(url.replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
+
+        if url.find('radiotime.com') != -1:
+            url = self.tunein_playlist(url)
+
+        self.pHandler.queued_play(url, payload['audioItem']['stream']['offsetInMilliseconds'], audio_type='media', stream_id=self.playlist_last_item)
 
     def play_speech(self, mrl):
         self.stop()
@@ -172,12 +187,10 @@ class Player(object):
         if streamId:
             if streamId in self.progressReportRequired:
                 self.progressReportRequired.remove(streamId)
-                gThread = threading.Thread(target=alexa_playback_progress_report_request,
-                                           args=(requestType, playerActivity, streamId))
+                gThread = threading.Thread(target=alexa_playback_progress_report_request, args=(requestType, playerActivity, streamId))
                 gThread.start()
 
-            if (requestType == RequestType.FINISHED) and (playerActivity == PlayerActivity.IDLE) and (
-                    self.playlist_last_item == streamId):
+            if (requestType == RequestType.FINISHED) and (playerActivity == PlayerActivity.IDLE) and (self.playlist_last_item == streamId):
                 gThread = threading.Thread(target=alexa_getnextitem, args=(self.navigation_token,))
                 self.navigation_token = None
                 gThread.start()
@@ -189,6 +202,10 @@ class Player(object):
         lines = req.content.decode().split('\n')
 
         nurl = self.tunein_parser.parse_stream_url(lines[0])
+
+        logger.debug("NURL")
+        logger.debug(nurl)
+
         if nurl:
             return nurl[0]
 
@@ -200,8 +217,7 @@ def playback_callback(request_type, player_activity, stream_id):
     return player.playback_callback(request_type, player_activity, stream_id)
 
 
-im = importlib.import_module('alexapi.playback_handlers.' + config['sound']['playback_handler'] + "handler",
-                             package=None)
+im = importlib.import_module('alexapi.playback_handlers.' + config['sound']['playback_handler'] + "handler", package=None)
 cl = getattr(im, config['sound']['playback_handler'].capitalize() + 'Handler')
 pHandler = cl(config, playback_callback)
 player = Player(config, platform, pHandler)
@@ -346,6 +362,112 @@ def alexa_speech_recognizer(audio_stream):
     process_response(resp)
 
 
+def alexa_speech_recognizer_generate_data2(audio, boundary, data):
+    logger.debug('Start sending speech to Alexa Voice Service')
+    chunk = '--%s\r\n' % boundary
+    chunk += (
+        'Content-Disposition: form-data; name="metadata"\r\n'
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n'
+    )
+
+    yield bytes(chunk + json.dumps(data) + '\r\n', 'utf8')
+
+    chunk = '--%s\r\n' % boundary
+    chunk += (
+        'Content-Disposition: form-data; name="audio"\r\n'
+        'Content-Type: application/octet-stream\r\n\r\n'
+    )
+
+    yield bytes(chunk, 'utf8')
+
+    for audio_chunk in audio:
+        yield audio_chunk
+
+    yield bytes('--%s--\r\n' % boundary, 'utf8')
+    logger.debug('Finished sending speech to Alexa Voice Service')
+
+    platform.indicate_processing()
+
+
+def alexa_speech_recognizer2(audio):
+    host = 'https://avs-alexa-na.amazon.com'
+    url = '/v20160207/events'
+    boundary = 'this-is-a-boundary'
+    messageid = str(uuid.uuid4())
+    requestid = str(uuid.uuid4())
+
+    event = {
+        'header': {
+            'namespace': 'SpeechRecognizer',
+            'name': 'Recognize',
+            'messageId': messageid,
+            'dialogRequestId': requestid
+        },
+        'payload': {
+            'profile': 'CLOSE_TALK',
+            'format': 'AUDIO_L16_RATE_16000_CHANNELS_1',
+            'initiator': {
+                'type': 'PRESS_AND_HOLD',
+                'payload': {
+
+                }
+            }
+        }
+    }
+
+    context = [
+        {
+            'header': {
+                'namespace': 'AudioPlayer',
+                'name': 'PlaybackState',
+            },
+            'payload': {
+                'offsetInMilliseconds': '0',
+                'playerActivity': 'IDLE',
+                'token': ''
+            }
+        }
+    ]
+
+    headers = {
+        'Authorization': 'Bearer %s' % token,
+        'Content-Type': 'multipart/form-data; boundary=%s' % boundary
+    }
+    # logger.debug(event)
+    data = alexa_speech_recognizer_generate_data2(audio, boundary, {'content': context, 'event': event})
+
+    # b = []
+    # for x in data:
+    #     b.append(x)
+
+    # data2 = alexa_speech_recognizer_generate_data2(audio, boundary, {'content': context, 'event': event})
+
+    logger.info('Generated Data')
+    # logger.debug(data)
+
+    s = requests.Session()
+    s.mount(host, HTTP20Adapter())
+
+    b = []
+    for x in data:
+        b.append(x)
+    b = b''.join(b)
+    response = s.post(host + url, headers=headers, data=b)
+
+    process_response2(response)
+
+    # logger.debug('Creating connection')
+    # c = HTTPConnection(url, 443, True)
+    # logger.debug('Connection created')
+    # logger.debug('Requesting')
+    # c.request('POST', '/v20160207/events', data, headers)
+    # logger.debug('Requested')
+    # resp = c.get_response()
+    # process_response2(resp)
+
+    platform.indicate_processing(False)
+
+
 def alexa_getnextitem(navigationToken):
     # https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/rest/audioplayer-getnextitem-request
 
@@ -420,16 +542,17 @@ def alexa_playback_progress_report_request(request_type, player_activity, stream
 
 def process_response(response):
     logger.debug("Processing Request Response...")
-
+    logger.debug(response.headers)
+    logger.debug(response.content)
     if response.status_code == 200:
         try:
-            data = bytes("Content-Type: ", 'utf-8') + bytes(response.headers['content-type'], 'utf-8') + bytes(
-                '\r\n\r\n', 'utf-8') + response.content
+            data = bytes("Content-Type: ", 'utf-8') + bytes(response.headers['content-type'], 'utf-8') + bytes('\r\n\r\n', 'utf-8') + response.content
             msg = email.message_from_bytes(data)  # pylint: disable=no-member
         except AttributeError:
             data = "Content-Type: " + response.headers['content-type'] + '\r\n\r\n' + response.content
             msg = email.message_from_string(data)
 
+        logger.debug(msg)
         for payload in msg.get_payload():
             if payload.get_content_type() == "application/json":
                 j = json.loads(payload.get_payload())
@@ -449,13 +572,11 @@ def process_response(response):
             for directive in j['messageBody']['directives']:
                 if directive['namespace'] == 'SpeechSynthesizer':
                     if directive['name'] == 'speak':
-                        player.play_speech("file://" + tmp_path + hashlib.md5(
-                            directive['payload']['audioContent'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3")
+                        player.play_speech("file://" + tmp_path + hashlib.md5(directive['payload']['audioContent'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3")
 
                 elif directive['namespace'] == 'SpeechRecognizer':
                     if directive['name'] == 'listen':
-                        logger.debug("Further Input Expected, timeout in: %sms",
-                                     directive['payload']['timeoutIntervalInMillis'])
+                        logger.debug("Further Input Expected, timeout in: %sms", directive['payload']['timeoutIntervalInMillis'])
 
                         player.play_speech(resources_path + 'beep.wav')
                         timeout = directive['payload']['timeoutIntervalInMillis'] / 116
@@ -502,6 +623,100 @@ def process_response(response):
         platform.indicate_failure()
 
 
+def process_response2(response):
+    logger.debug("Processing request response")
+    # logger.debug(response.headers)
+    # logger.debug(response.content)
+
+    headers = response.headers
+    content = response.content
+
+    # pheaders = process_headers2(headers)
+
+    if response.status_code == 200:
+        try:
+            data = bytes("Content-Type: ", 'utf-8') + response.headers[b'content-type'] + bytes('\r\n\r\n', 'utf-8') + content
+            msg = email.message_from_bytes(data)  # pylint: disable=no-member
+        except AttributeError:
+            data = "Content-Type: " + response.headers[b'content-type'] + '\r\n\r\n' + content
+            msg = email.message_from_string(data)
+
+        # logger.debug(msg)
+        for payload in msg.get_payload():
+            # logger.debug(payload)
+            if payload.get_content_type() == "application/json":
+                j = json.loads(payload.get_payload())
+                logger.debug("JSON String Returned: %s", json.dumps(j, indent=2))
+            elif payload.get_content_type() == "audio/mpeg" or payload.get_content_type() == "application/octet-stream":
+                filename = tmp_path + hashlib.md5(payload.get('Content-ID').strip("<>").encode()).hexdigest() + ".mp3"
+                logger.debug(filename)
+                with open(filename, 'wb') as f:
+                    f.write(payload.get_payload(decode=True))
+            else:
+                logger.debug("NEW CONTENT TYPE RETURNED: %s", payload.get_content_type())
+
+        logger.debug(j)
+
+        if j['directive']['header']['namespace'] == 'SpeechSynthesizer':
+            if j['directive']['header']['name'] == 'Speak':
+                filename = tmp_path + hashlib.md5(j['directive']['payload']['url'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
+                logger.debug(filename)
+                player.play_speech("file://" + filename)
+
+        elif j['directive']['header']['namespace'] == 'SpeechRecognizer':
+            if j['directive']['header']['name'] == 'ExpectSpeech':
+                logger.debug("Further Input Expected, timeout in: %sms", j['directive']['payload']['timeoutInMilliseconds'])
+
+                player.play_speech(resources_path + 'beep.wav')
+                timeout = j['directive']['payload']['timeoutInMilliseconds'] / 116
+                audio_stream = capture.silence_listener(timeout)
+
+                # now process the response
+                alexa_speech_recognizer2(audio_stream)
+
+        elif j['directive']['header']['namespace'] == 'AudioPlayer':
+            if j['directive']['header']['name'] == 'Play':
+                player.play_playlist2(j['directive']['payload'])
+
+        elif j['directive']['header']['namespace'] == "Speaker":
+            # speaker control such as volume
+            if j['directive']['header']['name'] == 'SetVolume':
+                vol_token = j['directive']['payload']['volume']
+                type_token = j['directive']['payload']['adjustmentType']
+                if type_token == 'relative':
+                    volume = player.get_volume() + int(vol_token)
+                else:
+                    volume = int(vol_token)
+
+                if volume > MAX_VOLUME:
+                    volume = MAX_VOLUME
+                elif volume < MIN_VOLUME:
+                    volume = MIN_VOLUME
+
+                player.set_volume(volume)
+
+                logger.debug("new volume = %s", volume)
+
+        return
+    elif response.status_code == 204:
+        logger.debug("Request response is null (This is OKAY!)")
+    else:
+        logger.info("Request error code: %s", response.status)
+        response.close()
+
+        platform.indicate_failure()
+
+
+def process_headers2(headers):
+    res = {}
+    for h in headers[b'content-type'].split(b';'):
+        split = h.split(b'=')
+        if len(split) == 2:
+            res[split[0].decode('utf8')] = split[1].decode('utf8')
+
+    return res
+
+
 trigger_thread = None
 
 
@@ -542,7 +757,7 @@ def trigger_process(trigger):
         player.play_speech(resources_path + 'alexayes.mp3')
 
     audio_stream = capture.silence_listener(force_record=force_record)
-    alexa_speech_recognizer(audio_stream)
+    alexa_speech_recognizer2(audio_stream)
 
     triggers.enable()
 
@@ -563,25 +778,104 @@ def cleanup(signal, frame):  # pylint: disable=redefined-outer-name,unused-argum
     sys.exit(0)
 
 
+def oobe():
+    # https://developer.amazon.com/docs/alexa-voice-service/capabilities-api.html
+    url = 'https://api.amazonalexa.com/v1/devices/@self/capabilities'
+    headers = {
+        'content-type': 'application/json; charset=UTF-8',
+        'Authorization': 'Bearer %s' % token
+    }
+    data = {
+        'envelopeVersion': 20160207,
+        "capabilities": [
+            {
+                "type": "AlexaInterface",
+                "interface": "Alerts",
+                "version": "1.3"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "AudioPlayer",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "Notifications",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "PlaybackController",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "Settings",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "Speaker",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "SpeechRecognizer",
+                "version": "2.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "SpeechSynthesizer",
+                "version": "1.0"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "System",
+                "version": "1.1"
+            },
+            {
+                "type": "AlexaInterface",
+                "interface": "VisualActivityTracker",
+                "version": "1.0"
+            }
+        ]
+    }
+
+    # headers['content-length'] = str(sys.getsizeof(data))
+    # logger.debug('content length: ' + headers['content-length'])
+
+    response = requests.put(url, headers=headers, data=json.dumps(data))
+    process_response(response)
+
+
 if __name__ == "__main__":
+    logger.debug("INIT")
 
     if event_commands['startup']:
         subprocess.Popen(event_commands['startup'], shell=True, stdout=subprocess.PIPE)
 
     try:
+        logger.debug("before")
         capture = alexapi.capture.Capture(config, tmp_path)
     except ConfigurationException as exp:
         logger.critical(exp)
         sys.exit(1)
 
+    logger.debug("after")
+
+    logger.debug("setting up capture")
     capture.setup(platform.indicate_recording)
 
+    logger.debug("setting up triggers")
     triggers.init(config, trigger_callback, capture)
     triggers.setup()
 
+    logger.debug("setting up pHandler")
     pHandler.setup()
+    logger.debug("setting up platform")
     platform.setup()
 
+    logger.debug("setting up signals")
     for sig in (signal.SIGABRT, signal.SIGILL, signal.SIGINT, signal.SIGSEGV, signal.SIGTERM):
         signal.signal(sig, cleanup)
 
@@ -599,8 +893,12 @@ if __name__ == "__main__":
         platform.indicate_failure()
         sys.exit(1)
 
-    platform_trigger_callback = triggers.triggers[
-        'platform'].platform_callback if 'platform' in triggers.triggers else None
+    if config['oobe'] is False:
+        logger.info('Doing OOBE')
+        oobe()
+        apconfig.set_variable('oobe', True)
+
+    platform_trigger_callback = triggers.triggers['platform'].platform_callback if 'platform' in triggers.triggers else None
     platform.after_setup(platform_trigger_callback)
     triggers.enable()
 

@@ -319,13 +319,11 @@ class TuneIn(object):
             if parser:
                 playlist_data = StringIO.StringIO(playlist)
                 try:
-                    results = [u for u in parser(playlist_data)
-                               if u and u != url]
+                    results = [u for u in parser(playlist_data) if u and u != url]
                 except Exception as exp:  # pylint: disable=broad-except
                     logger.error('TuneIn playlist parsing failed %s', exp)
                 if not results:
-                    logger.debug('Parsing failure, '
-                                 'malformed playlist: %s', playlist)
+                    logger.debug('Parsing failure, malformed playlist: %s', playlist)
         elif content_type:
             results = [url]
         logger.debug('Got %s', results)
