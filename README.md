@@ -1,6 +1,8 @@
-# AlexaPi (the new & awesome version) [![Gitter chat](https://badges.gitter.im/alexa-pi/Lobby.png)](https://gitter.im/alexa-pi/Lobby)
+# AlexaPi (the newer & awesomer version)
 
 This is a client for Amazon's Alexa service. It is intended and tested to run on a wide range of platforms, such as Raspberry Pi, Orange Pi, CHIP and ordinary Linux or Windows desktops.
+
+#### Now using API v20160207 
 
 ### Do you want to help out? Read the [Contribution Guide](CONTRIBUTING.md).
 
