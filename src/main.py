@@ -14,13 +14,12 @@ import optparse
 import email
 import subprocess
 import hashlib
-from future.builtins import bytes
 
 import yaml
 import requests
 import coloredlogs
 
-import alexapi.config as config
+import alexapi.config
 import alexapi.tunein as tunein
 import alexapi.capture
 import alexapi.triggers as triggers
@@ -65,10 +64,10 @@ cmdopts, cmdargs = parser.parse_args()
 silent = cmdopts.silent
 debug = cmdopts.debug
 
-config_exists = config.filename is not None
+config_exists = alexapi.config.filename is not None
 
 if config_exists:
-    with open(config.filename, 'r') as stream:
+    with open(alexapi.config.filename, 'r') as stream:
         config = yaml.load(stream)
 
 if debug:
@@ -110,7 +109,7 @@ cl = getattr(im, config['platform']['device'].capitalize() + 'Platform')
 platform = cl(config)
 
 
-class Player(object):
+class Player:
     config = None
     platform = None
     pHandler = None
@@ -120,31 +119,31 @@ class Player(object):
     playlist_last_item = None
     progressReportRequired = []
 
-    def __init__(self, iconfig, iplatform, iphandler):
-        self.config = iconfig
-        self.platform = iplatform
-        self.pHandler = iphandler
+    def __init__(self, config, platform, pHandler):  # pylint: disable=redefined-outer-name
+        self.config = config
+        self.platform = platform
+        self.pHandler = pHandler  # pylint: disable=invalid-name
         self.tunein_parser = tunein.TuneIn(5000)
 
     def play_playlist(self, payload):
         self.navigation_token = payload['navigationToken']
         self.playlist_last_item = payload['audioItem']['streams'][-1]['streamId']
 
-        for astream in payload['audioItem']['streams']:  # pylint: disable=redefined-outer-name
+        for stream in payload['audioItem']['streams']:  # pylint: disable=redefined-outer-name
 
-            stream_id = astream['streamId']
-            if astream['progressReportRequired']:
-                self.progressReportRequired.append(stream_id)
+            streamId = stream['streamId']
+            if stream['progressReportRequired']:
+                self.progressReportRequired.append(streamId)
 
-            url = astream['streamUrl']
-            if astream['streamUrl'].startswith("cid:"):
+            url = stream['streamUrl']
+            if stream['streamUrl'].startswith("cid:"):
                 url = "file://" + tmp_path + hashlib.md5(
-                    astream['streamUrl'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
+                    stream['streamUrl'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3"
 
-            if url.find('radiotime.com') != -1:
+            if (url.find('radiotime.com') != -1):
                 url = self.tunein_playlist(url)
 
-            self.pHandler.queued_play(url, astream['offsetInMilliseconds'], audio_type='media', stream_id=stream_id)
+            self.pHandler.queued_play(url, stream['offsetInMilliseconds'], audio_type='media', stream_id=streamId)
 
     def play_speech(self, mrl):
         self.stop()
@@ -196,8 +195,8 @@ class Player(object):
 
 
 # Playback handler
-def playback_callback(request_type, player_activity, stream_id):
-    return player.playback_callback(request_type, player_activity, stream_id)
+def playback_callback(requestType, playerActivity, streamId):
+    return player.playback_callback(requestType, playerActivity, streamId)
 
 
 im = importlib.import_module('alexapi.playback_handlers.' + config['sound']['playback_handler'] + "handler",
@@ -224,7 +223,7 @@ def internet_on():
         return False
 
 
-class Token(object):
+class Token:
     _token = ''
     _timestamp = None
     _validity = 3570
@@ -235,8 +234,7 @@ class Token(object):
 
         if not self._aconfig.get('refresh_token'):
             logger.critical("AVS refresh_token not found in the configuration file. "
-                            "Run the setup again to fix your installation "
-                            "(see project wiki for installation instructions).")
+                            "Run the setup again to fix your installation (see project wiki for installation instructions).")
             raise ConfigurationException
 
         self.renew()
@@ -264,13 +262,13 @@ class Token(object):
         try:
             response = requests.post(url, data=payload)
             resp = json.loads(response.text)
-
+            logger.info(resp)
             self._token = resp['access_token']
             self._timestamp = time.time()
 
             logger.info("AVS token: Obtained successfully")
         except requests.exceptions.RequestException as exp:
-            logger.critical("AVS token: Failed to obtain a token: " + str(exp))
+            logger.critical("AVS token: Failed to obtain a token: %s", str(exp))
 
 
 # from https://github.com/respeaker/Alexa/blob/master/alexa.py
@@ -368,7 +366,7 @@ def alexa_getnextitem(navigationToken):
     process_response(response)
 
 
-def alexa_playback_progress_report_request(request_type, player_activity, stream_id):
+def alexa_playback_progress_report_request(requestType, playerActivity, stream_id):
     # https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/rest/audioplayer-events-requests
     # streamId                  Specifies the identifier for the current stream.
     # offsetInMilliseconds      Specifies the current position in the track, in milliseconds.
@@ -386,28 +384,28 @@ def alexa_playback_progress_report_request(request_type, player_activity, stream
             "playbackState": {
                 "streamId": stream_id,
                 "offsetInMilliseconds": 0,
-                "playerActivity": player_activity.upper()
+                "playerActivity": playerActivity.upper()
             }
         }
     }
 
-    if request_type.upper() == RequestType.ERROR:
+    if requestType.upper() == RequestType.ERROR:
         # The Playback Error method sends a notification to AVS that the audio player has experienced an issue during playback.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackError"
-    elif request_type.upper() == RequestType.FINISHED:
+    elif requestType.upper() == RequestType.FINISHED:
         # The Playback Finished method sends a notification to AVS that the audio player has completed playback.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackFinished"
-    elif request_type.upper() == PlayerActivity.IDLE:  # This is an error as described in https://github.com/alexa-pi/AlexaPi/issues/117
+    elif requestType.upper() == PlayerActivity.IDLE:  # This is an error as described in https://github.com/alexa-pi/AlexaPi/issues/117
         # The Playback Idle method sends a notification to AVS that the audio player has reached the end of the playlist.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackIdle"
-    elif request_type.upper() == RequestType.INTERRUPTED:
+    elif requestType.upper() == RequestType.INTERRUPTED:
         # The Playback Interrupted method sends a notification to AVS that the audio player has been interrupted.
         # Note: The audio player may have been interrupted by a previous stop Directive.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackInterrupted"
-    elif request_type.upper() == "PROGRESS_REPORT":
+    elif requestType.upper() == "PROGRESS_REPORT":
         # The Playback Progress Report method sends a notification to AVS with the current state of the audio player.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackProgressReport"
-    elif request_type.upper() == RequestType.STARTED:
+    elif requestType.upper() == RequestType.STARTED:
         # The Playback Started method sends a notification to AVS that the audio player has started playing.
         url = "https://access-alexa-na.amazon.com/v1/avs/audioplayer/playbackStarted"
 
@@ -421,85 +419,84 @@ def alexa_playback_progress_report_request(request_type, player_activity, stream
 def process_response(response):
     logger.debug("Processing Request Response...")
 
-    if response.status_code == 200:
-        try:
-            data = bytes("Content-Type: ", 'utf-8') + bytes(response.headers['content-type'], 'utf-8') + bytes(
-                '\r\n\r\n', 'utf-8') + response.content
-            msg = email.message_from_bytes(data)  # pylint: disable=no-member
-        except AttributeError:
-            data = "Content-Type: " + response.headers['content-type'] + '\r\n\r\n' + response.content
-            msg = email.message_from_string(data)
-
-        for payload in msg.get_payload():
-            if payload.get_content_type() == "application/json":
-                j = json.loads(payload.get_payload())
-                logger.debug("JSON String Returned: %s", json.dumps(j, indent=2))
-            elif payload.get_content_type() == "audio/mpeg":
-                filename = tmp_path + hashlib.md5(payload.get('Content-ID').strip("<>").encode()).hexdigest() + ".mp3"
-                with open(filename, 'wb') as f:
-                    f.write(payload.get_payload(decode=True))
-            else:
-                logger.debug("NEW CONTENT TYPE RETURNED: %s", payload.get_content_type())
-
-        # Now process the response
-        if 'directives' in j['messageBody']:
-            if not j['messageBody']['directives']:
-                logger.debug("0 Directives received")
-
-            for directive in j['messageBody']['directives']:
-                if directive['namespace'] == 'SpeechSynthesizer':
-                    if directive['name'] == 'speak':
-                        player.play_speech("file://" + tmp_path + hashlib.md5(
-                            directive['payload']['audioContent'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3")
-
-                elif directive['namespace'] == 'SpeechRecognizer':
-                    if directive['name'] == 'listen':
-                        logger.debug("Further Input Expected, timeout in: %sms",
-                                     directive['payload']['timeoutIntervalInMillis'])
-
-                        player.play_speech(resources_path + 'beep.wav')
-                        timeout = directive['payload']['timeoutIntervalInMillis'] / 116
-                        audio_stream = capture.silence_listener(timeout)
-
-                        # now process the response
-                        alexa_speech_recognizer(audio_stream)
-
-                elif directive['namespace'] == 'AudioPlayer':
-                    if directive['name'] == 'play':
-                        player.play_playlist(directive['payload'])
-
-                elif directive['namespace'] == "Speaker":
-                    # speaker control such as volume
-                    if directive['name'] == 'SetVolume':
-                        vol_token = directive['payload']['volume']
-                        type_token = directive['payload']['adjustmentType']
-                        if type_token == 'relative':
-                            volume = player.get_volume() + int(vol_token)
-                        else:
-                            volume = int(vol_token)
-
-                        if volume > MAX_VOLUME:
-                            volume = MAX_VOLUME
-                        elif volume < MIN_VOLUME:
-                            volume = MIN_VOLUME
-
-                        player.set_volume(volume)
-
-                        logger.debug("new volume = %s", volume)
-
-        # Additional Audio Iten
-        elif 'audioItem' in j['messageBody']:
-            player.play_playlist(j['messageBody'])
-
+    if response.status_code == 204:
+        logger.debug("Request Response is null (This is OKAY!)")
         return
 
-    elif response.status_code == 204:
-        logger.debug("Request Response is null (This is OKAY!)")
-    else:
+    if response.status_code != 200:
         logger.info("(process_response Error) Status Code: %s", response.status_code)
         response.connection.close()
-
         platform.indicate_failure()
+        return
+
+    try:
+        data = bytes("Content-Type: ", 'utf-8') + bytes(response.headers['content-type'], 'utf-8') + bytes('\r\n\r\n',
+                                                                                                           'utf-8') + response.content
+        msg = email.message_from_bytes(data)  # pylint: disable=no-member
+    except AttributeError:
+        data = "Content-Type: " + response.headers['content-type'] + '\r\n\r\n' + response.content
+        msg = email.message_from_string(data)
+
+    for payload in msg.get_payload():
+        if payload.get_content_type() == "application/json":
+            j = json.loads(payload.get_payload())
+            logger.debug("JSON String Returned: %s", json.dumps(j, indent=2))
+        elif payload.get_content_type() == "audio/mpeg":
+            filename = tmp_path + hashlib.md5(payload.get('Content-ID').strip("<>").encode()).hexdigest() + ".mp3"
+            with open(filename, 'wb') as f:
+                f.write(payload.get_payload(decode=True))
+        else:
+            logger.debug("NEW CONTENT TYPE RETURNED: %s", payload.get_content_type())
+
+    # Now process the response
+    if 'directives' in j['messageBody']:
+        if not j['messageBody']['directives']:
+            logger.debug("0 Directives received")
+
+        for directive in j['messageBody']['directives']:
+            if directive['namespace'] == 'SpeechSynthesizer':
+                if directive['name'] == 'speak':
+                    player.play_speech("file://" + tmp_path + hashlib.md5(
+                        directive['payload']['audioContent'].replace("cid:", "", 1).encode()).hexdigest() + ".mp3")
+
+            elif directive['namespace'] == 'SpeechRecognizer':
+                if directive['name'] == 'listen':
+                    logger.debug("Further Input Expected, timeout in: %sms",
+                                 directive['payload']['timeoutIntervalInMillis'])
+
+                    player.play_speech(resources_path + 'beep.wav')
+                    timeout = directive['payload']['timeoutIntervalInMillis'] / 116
+                    audio_stream = capture.silence_listener(timeout)
+
+                    # now process the response
+                    alexa_speech_recognizer(audio_stream)
+
+            elif directive['namespace'] == 'AudioPlayer':
+                if directive['name'] == 'play':
+                    player.play_playlist(directive['payload'])
+
+            elif directive['namespace'] == "Speaker":
+                # speaker control such as volume
+                if directive['name'] == 'SetVolume':
+                    vol_token = directive['payload']['volume']
+                    type_token = directive['payload']['adjustmentType']
+                    if (type_token == 'relative'):
+                        volume = player.get_volume() + int(vol_token)
+                    else:
+                        volume = int(vol_token)
+
+                    if (volume > MAX_VOLUME):
+                        volume = MAX_VOLUME
+                    elif (volume < MIN_VOLUME):
+                        volume = MIN_VOLUME
+
+                    player.set_volume(volume)
+
+                    logger.debug("new volume = %s", volume)
+
+    # Additional Audio Iten
+    elif 'audioItem' in j['messageBody']:
+        player.play_playlist(j['messageBody'])
 
 
 trigger_thread = None
@@ -552,6 +549,7 @@ def trigger_process(trigger):
 
 def cleanup(signal, frame):  # pylint: disable=redefined-outer-name,unused-argument
     triggers.disable()
+    triggers.cleanup()
     capture.cleanup()
     pHandler.cleanup()
     platform.cleanup()
@@ -570,14 +568,13 @@ if __name__ == "__main__":
 
     try:
         capture = alexapi.capture.Capture(config, tmp_path)
+        capture.setup(platform.indicate_recording)
+
+        triggers.init(config, trigger_callback, capture)
+        triggers.setup()
     except ConfigurationException as exp:
         logger.critical(exp)
         sys.exit(1)
-
-    capture.setup(platform.indicate_recording)
-
-    triggers.init(config, trigger_callback, capture)
-    triggers.setup()
 
     pHandler.setup()
     platform.setup()
